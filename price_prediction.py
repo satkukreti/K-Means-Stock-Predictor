@@ -18,7 +18,7 @@ sp500['Symbol'] = sp500['Symbol'].str.replace('.', '-')
 symbols_list = sp500['Symbol'].unique().tolist()
 
 end_date = '2024-02-01'
-start_date = pd.to_datetime(end_date) - pd.DateOffset(365*10)
+start_date = pd.to_datetime(end_date) - pd.DateOffset(years=10)
 
 df = yf.download(tickers=symbols_list, start=start_date, end=end_date)
 df = df.stack() # multi indexed
@@ -29,7 +29,7 @@ df.columns = df.columns.str.lower()
 # calculate technical indicators
 # Garman-Klass Volatility, RSI, Bollinger Bands, ATR, MACD, Dollar Volume
 
-df['garman-klass_vol'] = ((np.log(df['high'])-np.log(df['low']))**2)/2 - (2*np.log(2) - 1)*((np.log(df['adj close'])) - np.log(df['open'])**2)
+df['garman-klass_vol'] = (0.5 * (np.log(df['high'] / df['low'])**2)) - (2 * np.log(2) - 1) * (np.log(df['adj close'] / df['open'])**2)
 df['rsi'] = df.groupby(level=1)['adj close'].transform(lambda x : pandas_ta.rsi(close=x, length=20))
 df['bb_low'] = df.groupby(level=1)['adj close'].transform(lambda x : pandas_ta.bbands(close=np.log1p(x), length=20).iloc[:,0])
 df['bb_mid'] = df.groupby(level=1)['adj close'].transform(lambda x : pandas_ta.bbands(close=np.log1p(x), length=20).iloc[:,1])
@@ -47,4 +47,63 @@ def compute_macd(close):
 
 df['macd'] = df.groupby(level=1, group_keys=False)['adj close'].apply(compute_macd)
 df['dollar_vol'] = (df['adj close']*df['volume'])/1e6 # divide by a million
+
+# aggregate to a monthly level and filter top 150 liquid stocks
+
+last_cols = [c for c in df.columns.unique(0) if c not in ['dollar_vol', 'volume', 'open', 'high', 'low', 'close']]
+data = (pd.concat([df.unstack('ticker')['dollar_vol'].resample('M').mean().stack('ticker').to_frame('dollar_vol'), 
+                   df.unstack()[last_cols].resample('M').last().stack('ticker')], axis=1)).dropna()
+
+# calculate 5 year rolling avg dollar vol
+data['dollar_vol'] = data['dollar_vol'].unstack('ticker').rolling(window=5*12, min_periods=1).mean().stack()
+data['dollar_vol_rank'] = data.groupby('date')['dollar_vol'].rank(ascending=False)
+
+data = data[data['dollar_vol_rank'] < 150].drop(['dollar_vol', 'dollar_vol_rank'], axis=1)
+
+# calculate monthly returns for different time horizons as features
+# lags for 1, 2, 3, 6, 9, and 12 months
+
+def calculate_returns(df):
+    outlier_cutoff = 0.005 # 99.5 percentile
+    lags = [1, 2, 3, 6, 9, 12]
+    
+    for lag in lags:
+        df[f'return_{lag}m'] = (df['adj close']
+                               .pct_change(lag)
+                               .pipe(lambda x : x.clip(lower=x.quantile(outlier_cutoff),
+                                                        upper=x.quantile(1-outlier_cutoff)))
+                               .add(1)
+                               .pow(1/lag)
+                               .sub(1))
+    return df
+
+data = data.groupby(level=1, group_keys=False).apply(calculate_returns).dropna()
+
+# fama-french factors for better risk evaluation
+
+factor_data = web.DataReader('F-F_Research_Data_5_Factors_2x3',
+                             'famafrench',
+                             start='2015')[0].drop('RF', axis=1)
+
+factor_data.index = factor_data.index.to_timestamp() # converts from period to datetime index
+factor_data = factor_data.resample('M').last().div(100)
+
+factor_data.index.name = 'date' 
+
+# we can now compare the factor to the 1m returns to calculate the beta
+
+factor_data = factor_data.join(data['return_1m']).sort_index()
+
+observations = factor_data.groupby(level=1).size()
+valid_stocks = observations[observations >= 10]
+factor_data = factor_data[factor_data.index.get_level_values('ticker')
+                          .isin(valid_stocks.index)] # only keeping stocks with >= 10 months of data for rolling factor betas calcs
+
+betas = factor_data.groupby(level=1,
+                            group_keys=False).apply(lambda x : RollingOLS(endog=x['return_1m'],
+                                     exog=sm.add_constant(x.drop('return_1m', axis=1)),
+                                     window=min(24, x.shape[0]),
+                                     min_nobs=len(x.columns)+1)
+               .fit(params_only=True)
+               .params.drop('const', axis=1))
 
