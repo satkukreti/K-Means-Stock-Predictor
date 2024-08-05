@@ -48,6 +48,7 @@ def compute_macd(close):
 df['macd'] = df.groupby(level=1, group_keys=False)['adj close'].apply(compute_macd)
 df['dollar_vol'] = (df['adj close']*df['volume'])/1e6 # divide by a million
 
+# normalizing will help in each factor contributing equally to the centroid distance calculation
 # aggregate to a monthly level and filter top 150 liquid stocks
 
 last_cols = [c for c in df.columns.unique(0) if c not in ['dollar_vol', 'volume', 'open', 'high', 'low', 'close']]
@@ -107,3 +108,102 @@ betas = factor_data.groupby(level=1,
                .fit(params_only=True)
                .params.drop('const', axis=1))
 
+# shifting the betas as we would only know them at the end of the month
+# combine them with the other features
+
+data = data.join(betas.groupby('ticker').shift())
+
+# fill in Nan values with mean
+
+factors = ['Mkt-RF', 'SMB',	'HML', 'RMW', 'CMA']
+data.loc[:, factors] = data.groupby('ticker', group_keys=False)[factors].apply(lambda x : x.fillna(x.mean()))
+
+data = data.dropna()
+data = data.drop('adj close', axis = 1)
+
+# apply machine learning model to decide on what stocks our porfolio consists of
+# training it based on having a long portfolio
+# K-means clustering algo to group stocks based on features
+#  K = 4
+# strategy will be based on rsi value, so which stocks have the highest momentum in the previous month
+
+from sklearn.cluster import KMeans
+
+target_rsi_vals = [30, 45, 55, 70]
+initial_centroids = np.zeros((len(target_rsi_vals), 18)) # centers and num features
+initial_centroids[:, 6] = target_rsi_vals
+
+def get_clusters(df):
+    df['cluster'] = KMeans(n_clusters=4,
+                          random_state=0, # random seed
+                          init=initial_centroids).fit(df).labels_ # clusters created based on pre-defined centers
+    return df
+
+data = data.dropna().groupby('date', group_keys=False).apply(get_clusters)
+
+# create a scatter plot visualization
+
+def plot_clusters(df):
+    cluster0 = df[df['cluster']==0]
+    cluster1 = df[df['cluster']==1]
+    cluster2 = df[df['cluster']==2]
+    cluster3 = df[df['cluster']==3]
+
+    plt.scatter(cluster0.iloc[:,0], cluster0.iloc[:,6], color='red', label='cluster 0')
+    plt.scatter(cluster1.iloc[:,0], cluster1.iloc[:,6], color='green', label='cluster 1')
+    plt.scatter(cluster2.iloc[:,0], cluster2.iloc[:,6], color='blue', label='cluster 2')
+    plt.scatter(cluster3.iloc[:,0], cluster3.iloc[:,6], color='yellow', label='cluster 3')
+
+    plt.legend()
+    plt.show()
+    return
+
+plt.style.use('ggplot')
+
+for i in data.index.get_level_values('date').unique().tolist(): # display on a monthly basis
+    g = data.xs(i, level=0)
+    plt.title(f'Date {i}')
+    plot_clusters(g)
+
+# select stocks based on cluster 3, high rsi should outperform even in later months
+filtered_df = data[data['cluster']==3].copy()
+filtered_df = filtered_df.reset_index(level=1)
+
+# use these values for the stocks we want to invest in the next month
+filtered_df.index = filtered_df.index + pd.DateOffset(1)
+filtered_df = filtered_df.reset_index().set_index(['date', 'ticker'])
+
+# create a dict to store the name of the stocks we want
+dates = filtered_df.index.get_level_values('date').unique().tolist()
+
+fixed_dates = {}
+for d in dates:
+    fixed_dates[d.strftime('%Y-%m-%d')] = filtered_df.xs(d, level=0).index.tolist()
+
+
+# form a portfolio based on EfficientFrontier max sharpe ratio
+# maximize weights
+# note: sharpe ratio helps us calculate the highest amount of return for the lowest expected risk
+
+from pypfopt.efficient_frontier import EfficientFrontier
+from pypfopt import risk_models
+from pypfopt import expected_returns
+
+def optimize_weights(prices, lower_bound=0): # supply full year of prices
+    returns = expected_returns.mean_historical_return(prices=prices, frequency=252) # expected returns
+    cov = risk_models.sample_cov(prices=prices, frequency=252) # covariance
+
+    ef = EfficientFrontier(expected_returns=returns,
+                           cov_matrix=cov,
+                           weight_bounds=(lower_bound,.1), # diversify by capping the weights
+                           solver='SCS')
+    weights = ef.max_sharpe()
+
+    return ef.clean_weights()
+
+# get the past year of stock info
+stocks = data.index.get_level_values('ticker').unique().tolist()
+
+new_df = yf.download(tickers=stocks,
+                     start=data.index.get_level_values('date').unique()[0]-pd.DateOffset(months=12),
+                    end=data.index.get_level_values('date').unique()[-1])
