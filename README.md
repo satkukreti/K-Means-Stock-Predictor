@@ -7,7 +7,7 @@ Use this model to predict whether a stock price will increase or decrease.
 
 ### Thought Process
 
-I want to create a long-based portfolio, and indicators like RSI and ATR can predict whether a stock has high momentum. For v1, I predict that a previous high RSI and moderate-high ATR will mean that the stock will do well for the next month.
+I wanted to create a long-based portfolio, and indicators like RSI and ATR can predict whether a stock has high momentum. For v1, I predict that a previous high RSI and low-moderate ATR will mean that the stock will do well for the next month.
 
 ### Execution Process
 
