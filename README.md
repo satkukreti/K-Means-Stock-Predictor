@@ -17,6 +17,8 @@ I then used an unsupervised machine learning model to apply K-means clustering w
 
 Lastly, I calculated my returns over a 10-year period and benchmarked them to SPY.
 
+Look at v1_rsi&atr_strategy for the comparison.
+
 ## Future Features
 
 - Derive a sentiment score using social media-based opinions.
