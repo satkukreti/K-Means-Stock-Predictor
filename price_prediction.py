@@ -149,20 +149,20 @@ def plot_clusters(df):
     cluster2 = df[df['cluster']==2]
     cluster3 = df[df['cluster']==3]
 
-    plt.scatter(cluster0.iloc[:,0], cluster0.iloc[:,6], color='red', label='cluster 0')
-    plt.scatter(cluster1.iloc[:,0], cluster1.iloc[:,6], color='green', label='cluster 1')
-    plt.scatter(cluster2.iloc[:,0], cluster2.iloc[:,6], color='blue', label='cluster 2')
-    plt.scatter(cluster3.iloc[:,0], cluster3.iloc[:,6], color='yellow', label='cluster 3')
+    # plt.scatter(cluster0.iloc[:,0], cluster0.iloc[:,6], color='red', label='cluster 0')
+    # plt.scatter(cluster1.iloc[:,0], cluster1.iloc[:,6], color='green', label='cluster 1')
+    # plt.scatter(cluster2.iloc[:,0], cluster2.iloc[:,6], color='blue', label='cluster 2')
+    # plt.scatter(cluster3.iloc[:,0], cluster3.iloc[:,6], color='yellow', label='cluster 3')
 
-    plt.legend()
-    plt.show()
+    # plt.legend()
+    # plt.show()
     return
 
-plt.style.use('ggplot')
+# plt.style.use('ggplot')
 
 for i in data.index.get_level_values('date').unique().tolist(): # display on a monthly basis
     g = data.xs(i, level=0)
-    plt.title(f'Date {i}')
+    # plt.title(f'Date {i}')
     plot_clusters(g)
 
 # select stocks based on cluster 3, high rsi should outperform even in later months
